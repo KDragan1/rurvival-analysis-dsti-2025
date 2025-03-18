@@ -1,0 +1,203 @@
+---
+title: "Survival Analysis Project"
+author: "Karl Do Santos Zounon, Kateryna Draganova, Hanna Hellgren, Laura Lacombe"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+### Introduction
+In this analysis, we explore the survival patterns of lung cancer patients using the survival package in R. Our goal is to understand how different factors, such as age, sex, and performance scores influence survival outcomes.
+
+First, we load the necessary library and dataset. The _cancer_ dataset contains information about cancer patients, including their survival time and various clinical factors.  
+
+```{r}
+library(survival)
+data(cancer)
+head(cancer)
+df <- cancer
+
+```
+The dataset contains the following columns:
+
+inst: Institution code 
+
+time: Survival time in days 
+
+status: Censoring status (1=censored : this means that the event (death) was not observed during the study period. The patient may still be alive at the end of the study, the patient may have been lost to follow-up, the patient may have died after the study period ended, 2=dead) 
+
+age: Age in years 
+
+sex: Male=1, Female=2 
+
+ph.ecog: ECOG performance score as rated by the physician (0=asymptomatic, 1=symptomatic but completely ambulatory, 2=in bed <50% of the day, 3=in bed > 50% of the day but not bedbound, 4=bedbound) 
+
+ph.karno: Karnofsky performance score (bad=0-good=100) rated by physician 
+
+pat.karno: Karnofsky performance score as rated by patient 
+
+meal.cal: Calories consumed at meals 
+
+wt.loss: Weight loss in the last six months (pounds) 
+
+
+### Exploratory Data Analysis
+
+We begin by examining the dataset for missing values.
+
+```{r}
+colSums(is.na(df))
+```
+
+
+
+To handle the missing values, we remove the rows with missing discrete data and input the average of meal.cal and wt.loss.
+
+
+```{r}
+library(dplyr)
+clean_data <- df %>%
+  filter(!is.na(ph.ecog) & !is.na(ph.karno) & !is.na(pat.karno)) %>%
+  mutate(
+    meal.cal = ifelse(is.na(meal.cal), mean(meal.cal, na.rm = TRUE), meal.cal),
+    wt.loss = ifelse(is.na(wt.loss), mean(wt.loss, na.rm = TRUE), wt.loss)
+  )
+```
+
+```{r}
+colSums(is.na(clean_data))
+```
+Now, that we have clean data we can make our first model. We can plot the survival function with the Kaplan-Meier estimator.
+
+```{r}
+
+survival <- survfit(formula = Surv(time, status) ~ 1, data = clean_data)
+survival
+
+```
+```{r}
+
+plot(survival, mark.time = TRUE,
+     main = "Kaplan-Meier estimator",
+     ylab = "Survival probability",
+     xlab = "time (days)")
+
+
+```
+We can plot the cumulative hazard function, which is the accumulated risk over time, with the Nelson-Aalen estimator.
+
+```{r}
+cumul_hazard <- -log(survival$surv)
+
+plot(survival$time, cumul_hazard, type = "s", xlab = "Time", ylab = "Cumulative Hazard Function")
+```
+
+
+```{r}
+H1 <- survival$time[which.min(abs(cumul_hazard - 1))]
+
+H1
+```
+
+H(t)=1 is the time at which an individual is expected to have an event. So, the event is expected on the 429th day.
+
+The hazard function h(t) is the rate of change of the cumulative hazard function H(t). It represents the instantaneous rate of failure at time t (or the occurrence of an event).
+
+```{r}
+hazard <- diff(cumul_hazard) / diff(survival$time)
+
+hazard <- c(NA, hazard)
+
+plot(survival$time, hazard, type = "s", col = "black", xlab = "Time", ylab = "Hazard Function")
+```
+
+### Cox Proportional Hazard Model
+```{r}
+cox_model <- coxph(Surv(time, status) ~ age + sex + ph.ecog, data = clean_data)
+summary(cox_model)
+```
+
+HR = 0.5804, meaning males have 42% lower hazard than females (because HR < 1).
+Significant (p = 0.00133) → Sex significantly affects survival.
+
+HR = 1.5849, meaning a higher ph.ecog score increases the hazard of death by 58.5%.
+Highly significant (p < 0.001) → ECOG score strongly impacts survival.
+
+
+The 95% CI gives the range in which the true hazard ratio likely falls.
+If the CI excludes 1, the variable is statistically significant.
+For sex (0.4163 to 0.8092) and ph.ecog (1.2642 to 1.9870), the confidence intervals do not include 1, confirming their statistical significance.
+
+Concordance = 0.635 → Indicates the model's predictive accuracy (values closer to 1 are better).
+
+All three tests confirm that at least one covariate significantly affects survival.
+
+
+```{r}
+
+library(survminer)
+# visualization of CI
+ggforest(cox_model, data = clean_data)
+
+```
+
+
+
+
+```{r}
+
+print(paste(sum(clean_data$sex == 1), "males"))
+print(paste(sum(clean_data$sex == 2), "females"))
+
+```
+We have more observations of males than females, which we will have to take into account for the results.
+
+
+```{r}
+survival_male <- survfit(Surv(time, status) ~ 1, data = clean_data[clean_data$sex == 1, ])
+survival_female <- survfit(Surv(time, status) ~ 1, data = clean_data[clean_data$sex == 2, ])
+
+
+
+plot(survival_male, conf.int = FALSE,
+     main = "Kaplan-Meier estimator",
+     ylab = "Survival probability",
+     xlab = "time (days)",
+     col = "blue")
+
+lines(survival_female, conf.int = FALSE,
+     main = "Kaplan-Meier estimator",
+     ylab = "Survival probability",
+     xlab = "time (days)",
+     col = "red")
+
+
+```
+
+
+As we explained previously, ph.ecog is a strongly significant value, so we can compare different groups.
+```{r}
+# Fit the survival model by ECOG performance score 
+fit_ecog <- survfit(Surv(time, status == 2) ~ ph.ecog, data = clean_data) 
+ 
+# Plot the survival curves 
+plot(fit_ecog, col = 1:4, lty = 1:4, xlab = "Time (days)", ylab = "Survival Probability", main = "Survival Curves by ECOG Performance Score") 
+legend("topright", legend = levels(factor(cancer$ph.ecog)), col = 1:4, lty = 1:4, title = "ECOG Score") 
+```
+
+```{r}
+as.data.frame(table(clean_data$ph.ecog))
+```
+
+
+Patients with an ECOG score of 0 have the highest survival probability over time, followed by those with scores of 1, 2. The score 3 has only one observation which is why there is the vertical line after the event. This indicates that a lower ECOG score is associated with better survival outcomes. 
+
+### Conclusion
+
+
+Our analysis revealed that sex and ECOG performance score are significant predictors of lung cancer patient survival. Females tend to have better survival outcomes than males, although we had bias because of a higher percentage of male observations. Patients with higher ECOG scores, indicating poorer physical function, have a significantly higher risk of death. 
+
+In conclusion, this study highlighted the importance of sex and ECOG performance score as predictors of lung cancer patient survival. These results underscore the need for a personalized approach to cancer treatment, considering patients' individual characteristics. While some variables did not show a significant impact, they may play a role in specific contexts or in interaction with other factors. Further research is needed to deepen our understanding of the complex factors that influence lung cancer survival. Ultimately, this information can contribute to improving treatment strategies and enhancing outcomes for lung cancer patients. 
+
